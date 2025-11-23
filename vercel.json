@@ -1,10 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "nodejs22.x"
-    }
-  },
   "routes": [
     { "src": "/utr/oauth/start", "dest": "/api/utr/oauth/start.js" },
     { "src": "/utr/oauth/callback", "dest": "/api/utr/oauth/callback.js" },

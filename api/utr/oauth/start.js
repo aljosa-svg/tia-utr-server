@@ -1,5 +1,5 @@
 // api/utr/oauth/start.js
-import { rateLimit, logReq } from "../_utils.js";
+import { rateLimit, logReq } from "../../_utils.js";
 
 export default async function handler(req, res) {
   // CORS
@@ -16,8 +16,7 @@ export default async function handler(req, res) {
 
   const clientId = process.env.UTR_CLIENT_ID;
   const redirectUri = process.env.UTR_REDIRECT_URI;
-  const authBase = process.env.UTR_AUTH_BASE; 
-  // example: https://app.utrsports.net/oauth/authorize  (UTR will give you exact)
+  const authBase = process.env.UTR_AUTH_BASE;
 
   if (!clientId || !redirectUri || !authBase) {
     return res.status(500).json({
@@ -25,7 +24,6 @@ export default async function handler(req, res) {
     });
   }
 
-  // optional: pass through a state param for security
   const state = Math.random().toString(36).slice(2);
 
   const url =

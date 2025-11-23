@@ -1,5 +1,5 @@
 // api/utr/oauth/callback.js
-import { rateLimit, logReq } from "../_utils.js";
+import { rateLimit, logReq } from "../../_utils.js";
 
 export default async function handler(req, res) {
   // CORS
@@ -59,7 +59,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Return token payload to Base44 app frontend
     return res.status(200).json(json);
 
   } catch (err) {

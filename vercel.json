@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "functions": {
+    "api/**/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "routes": [
+    { "src": "/utr/oauth/start", "dest": "/api/utr/oauth/start.js" },
+    { "src": "/utr/oauth/callback", "dest": "/api/utr/oauth/callback.js" },
+    { "src": "/utr/snapshot", "dest": "/api/utr_snapshot.js" }
+  ]
+}

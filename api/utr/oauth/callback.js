@@ -1,71 +1,82 @@
 // api/utr/oauth/callback.js
-import { rateLimit, logReq } from "../../_utils.js";
+
+import fetch from "node-fetch";
 
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  if (!rateLimit(req, res)) return;
-
-  const url = new URL(req.url, `https://${req.headers.host}`);
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-
-  if (!code) {
-    return res.status(400).json({ error: "Missing ?code from UTR OAuth" });
-  }
-
-  const clientId = process.env.UTR_CLIENT_ID;
-  const clientSecret = process.env.UTR_CLIENT_SECRET;
-  const redirectUri = process.env.UTR_REDIRECT_URI;
-  const tokenUrl = process.env.UTR_TOKEN_URL;
-
-  if (!clientId || !clientSecret || !redirectUri || !tokenUrl) {
-    return res.status(500).json({
-      error: "Missing UTR env vars: UTR_CLIENT_ID, UTR_CLIENT_SECRET, UTR_REDIRECT_URI, UTR_TOKEN_URL"
-    });
-  }
-
-  logReq(req, { type: "oauth_callback", code, state });
-
   try {
-    const resp = await fetch(tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        grant_type: "authorization_code",
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri
-      })
-    });
+    const code = req.query.code;
+    const stateRaw = req.query.state || null;
 
-    const json = await resp.json();
-
-    if (!resp.ok) {
-      return res.status(resp.status).json({
-        error: "UTR token exchange failed",
-        body: json
-      });
+    if (!code) {
+      return res.status(400).json({ error: "Missing code" });
     }
 
-    return res.status(200).json(json);
+    // 1) Exchange authorization code for tokens
+    const tokenResp = await fetch(process.env.UTR_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: process.env.UTR_REDIRECT_URL,
+        client_id: process.env.UTR_CLIENT_ID,
+        client_secret: process.env.UTR_CLIENT_SECRET,
+      }),
+    });
+
+    const tokens = await tokenResp.json();
+
+    if (!tokenResp.ok) {
+      return res.status(400).json(tokens);
+    }
+
+    // 2) Fetch "me" to get UTR user id (optional)
+    let me = null;
+    try {
+      const meResp = await fetch(process.env.UTR_ME_PATH, {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      me = await meResp.json();
+    } catch (e) {}
+
+    const payload = {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_in: tokens.expires_in,
+      utr_user_id: me?.id || me?.user?.id || null,
+      state: stateRaw,
+    };
+
+    const accept = (req.headers.accept || "").toLowerCase();
+    const wantsHtml = accept.includes("text/html");
+
+    if (wantsHtml) {
+      // Popup HTML for Base44 integration
+      res.setHeader("Content-Type", "text/html");
+      return res.status(200).send(`
+<!doctype html>
+<html>
+  <head><title>UTR Connected</title></head>
+  <body>
+    <script>
+      (function () {
+        var payload = ${JSON.stringify(payload)};
+        if (window.opener) {
+          window.opener.postMessage({ type: "UTR_OAUTH_SUCCESS", payload: payload }, "*");
+        }
+        window.close();
+      })();
+    </script>
+    Connected. You can close this window.
+  </body>
+</html>
+      `);
+    }
+
+    // JSON fallback for API tools
+    return res.status(200).json(payload);
 
   } catch (err) {
-    console.error("OAuth callback error:", err);
-    return res.status(500).json({
-      error: "Server error",
-      message: err.message
-    });
+    return res.status(500).json({ error: err.message || "Callback failed" });
   }
 }

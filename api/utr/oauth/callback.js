@@ -1,82 +1,92 @@
 // api/utr/oauth/callback.js
+//
+// Handles the redirect back from UTR Engage.
+// Exchanges ?code=... for access + refresh tokens via /oauth/token.
 
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
   try {
     const code = req.query.code;
-    const stateRaw = req.query.state || null;
+    const oauthError = req.query.error;
+
+    // If UTR sent back an error instead of a code
+    if (oauthError) {
+      return res.status(400).json({
+        error: "utr_oauth_error",
+        utr_error: oauthError,
+        description: req.query.error_description || null,
+      });
+    }
 
     if (!code) {
       return res.status(400).json({ error: "Missing code" });
     }
 
-    // 1) Exchange authorization code for tokens
-    const tokenResp = await fetch(process.env.UTR_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: process.env.UTR_REDIRECT_URL,
-        client_id: process.env.UTR_CLIENT_ID,
-        client_secret: process.env.UTR_CLIENT_SECRET,
-      }),
-    });
+    const tokenUrl =
+      process.env.UTR_TOKEN_URL ||
+      "https://prod-utr-engage-api-data-azapp.azurewebsites.net/api/v1/oauth/token";
 
-    const tokens = await tokenResp.json();
+    const clientId = process.env.UTR_CLIENT_ID;
+    const clientSecret = process.env.UTR_CLIENT_SECRET;
 
-    if (!tokenResp.ok) {
-      return res.status(400).json(tokens);
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({
+        error: "missing_config",
+        message: "UTR_CLIENT_ID or UTR_CLIENT_SECRET is not configured",
+      });
     }
 
-    // 2) Fetch "me" to get UTR user id (optional)
-    let me = null;
-    try {
-      const meResp = await fetch(process.env.UTR_ME_PATH, {
-        headers: { Authorization: `Bearer ${tokens.access_token}` },
-      });
-      me = await meResp.json();
-    } catch (e) {}
-
-    const payload = {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expires_in: tokens.expires_in,
-      utr_user_id: me?.id || me?.user?.id || null,
-      state: stateRaw,
+    // Per docs: POST body with client_id, client_secret, code, grant_type
+    const body = {
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      grant_type: "authorization_code",
     };
 
-    const accept = (req.headers.accept || "").toLowerCase();
-    const wantsHtml = accept.includes("text/html");
+    const tokenResp = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
 
-    if (wantsHtml) {
-      // Popup HTML for Base44 integration
-      res.setHeader("Content-Type", "text/html");
-      return res.status(200).send(`
-<!doctype html>
-<html>
-  <head><title>UTR Connected</title></head>
-  <body>
-    <script>
-      (function () {
-        var payload = ${JSON.stringify(payload)};
-        if (window.opener) {
-          window.opener.postMessage({ type: "UTR_OAUTH_SUCCESS", payload: payload }, "*");
-        }
-        window.close();
-      })();
-    </script>
-    Connected. You can close this window.
-  </body>
-</html>
-      `);
+    const raw = await tokenResp.text();
+    let data = null;
+
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      // UTR returned something that isn’t JSON
+      return res.status(tokenResp.status || 500).json({
+        error: "token_parse_failed",
+        status: tokenResp.status,
+        raw,
+      });
     }
 
-    // JSON fallback for API tools
-    return res.status(200).json(payload);
+    if (!tokenResp.ok) {
+      return res.status(tokenResp.status || 400).json({
+        error: "utr_token_error",
+        status: tokenResp.status,
+        details: data,
+      });
+    }
 
+    // For now, just show what we got back so we can confirm it works.
+    // Later we will save access_token + refresh_token per player.
+    return res.status(200).json({
+      ok: true,
+      tokens: data,
+    });
   } catch (err) {
-    return res.status(500).json({ error: err.message || "Callback failed" });
+    console.error("[UTR OAuth Callback] error", err);
+    return res.status(500).json({
+      error: "callback_failed",
+      message: err.message || "Unknown error",
+    });
   }
 }

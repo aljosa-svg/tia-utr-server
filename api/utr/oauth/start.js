@@ -1,41 +1,55 @@
 // api/utr/oauth/start.js
-import { rateLimit, logReq } from "../../_utils.js";
+//
+// Start the UTR Engage OAuth flow.
+// Sends the user to the Engage API authorize endpoint, NOT app.utrsports.net.
+//
+
+import crypto from "crypto";
 
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  try {
+    const clientId = process.env.UTR_CLIENT_ID;
+    const redirectUri = process.env.UTR_REDIRECT_URI;
+    const authBase = (process.env.UTR_AUTH_BASE ||
+      "https://prod-utr-engage-api-data-azapp.azurewebsites.net/api/v1"
+    ).replace(/\/$/, "");
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+    if (!clientId || !redirectUri) {
+      return res.status(500).json({
+        error: "missing_config",
+        message: "UTR_CLIENT_ID or UTR_REDIRECT_URI is not configured",
+      });
+    }
 
-  if (!rateLimit(req, res)) return;
+    // Random state for safety/debugging
+    const state =
+      (req.query.state && String(req.query.state)) ||
+      crypto.randomBytes(16).toString("hex");
 
-  const clientId = process.env.UTR_CLIENT_ID;
-  const redirectUri = process.env.UTR_REDIRECT_URI;
-  const authBase = process.env.UTR_AUTH_BASE;
+    // For now, just use a test ID. Later this can be your internal player ID.
+    const thirdPartyUserId =
+      (req.query.third_party_user_id && String(req.query.third_party_user_id)) ||
+      "tia-test-user-1";
 
-  if (!clientId || !redirectUri || !authBase) {
-    return res.status(500).json({
-      error: "Missing UTR_CLIENT_ID, UTR_REDIRECT_URI, or UTR_AUTH_BASE in env"
+    // Engage API authorize URL (Dave’s domain)
+    const authorizeUrl =
+      `${authBase}/oauth/authorize` +
+      `?response_type=code` +
+      `&client_id=${encodeURIComponent(clientId)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&third_party_user_id=${encodeURIComponent(thirdPartyUserId)}` +
+      `&approval_prompt=force` +
+      `&scope=${encodeURIComponent("ratings,profile,results")}` +
+      `&state=${encodeURIComponent(state)}`;
+
+    // Send browser to UTR
+    res.writeHead(302, { Location: authorizeUrl });
+    res.end();
+  } catch (err) {
+    console.error("[UTR OAuth Start] error", err);
+    res.status(500).json({
+      error: "oauth_start_failed",
+      message: err.message || "Unknown error",
     });
   }
-
-  const state = Math.random().toString(36).slice(2);
-
-  const url =
-    `${authBase}` +
-    `?response_type=code` +
-    `&client_id=${encodeURIComponent(clientId)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent("read")}` +
-    `&state=${encodeURIComponent(state)}`;
-
-  logReq(req, { type: "oauth_start" });
-
-  res.writeHead(302, { Location: url });
-  res.end();
 }

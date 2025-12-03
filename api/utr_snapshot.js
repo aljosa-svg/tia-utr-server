@@ -1,24 +1,19 @@
 // api/utr_snapshot.js
 //
-// UTR Snapshot Proxy for TIA Coaching Hub
-// - No Authorization header required from the frontend
-// - CORS-friendly for Base44
-// - Uses server-side env vars to call UTR's API
+// Uses a UTR Engage access_token to fetch the player's ratings.
+// TEMP VERSION: reads access_token from query string so we can test easily.
 //
-// Required env vars in Vercel:
-//   UTR_API_BASE      → e.g. "https://api.utrsports.net/v2"
-//   UTR_ACCESS_TOKEN  → Bearer token for UTR API (from OAuth or API key)
+// Later we can store tokens per player and remove the token from the URL.
 
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
   try {
-    // Allow Coaching Hub / Base44 frontend to call this server
+    // CORS – allow calls from your Coaching Hub / Base44 app
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
 
-    // Handle CORS preflight
     if (req.method === "OPTIONS") {
       return res.status(204).end();
     }
@@ -27,41 +22,27 @@ export default async function handler(req, res) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const utrId = req.query.utrId;
+    // For now we accept the access_token as a query param for testing.
+    const accessToken = req.query.access_token;
 
-    if (!utrId) {
-      return res.status(400).json({ error: "Missing utrId parameter" });
-    }
-
-    const API_BASE = (process.env.UTR_API_BASE || "").trim();
-    const ACCESS_TOKEN = (process.env.UTR_ACCESS_TOKEN || "").trim();
-
-    if (!API_BASE) {
-      return res.status(500).json({
-        error: "Missing UTR_API_BASE",
-        message:
-          "Set UTR_API_BASE in Vercel (e.g. https://api.utrsports.net/v2).",
+    if (!accessToken) {
+      return res.status(400).json({
+        error: "missing_access_token",
+        message: "Pass ?access_token=... in the query string for now.",
       });
     }
 
-    if (!ACCESS_TOKEN) {
-      return res.status(500).json({
-        error: "Missing UTR_ACCESS_TOKEN",
-        message:
-          "Set UTR_ACCESS_TOKEN in Vercel to a valid UTR API bearer token.",
-      });
-    }
+    const API_BASE =
+      (process.env.UTR_API_BASE ||
+        "https://prod-utr-engage-api-data-azapp.azurewebsites.net/api/v1"
+      ).replace(/\/$/, "");
 
-    // Build URL – adjust path if UTR docs specify a different snapshot endpoint
-    const base = API_BASE.replace(/\/$/, "");
-    const snapshotUrl = `${base}/players/${encodeURIComponent(
-      utrId
-    )}/rating`;
+    const ratingsUrl = `${API_BASE}/members/ratings`;
 
-    const utrResp = await fetch(snapshotUrl, {
+    const utrResp = await fetch(ratingsUrl, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
       },
     });
@@ -69,39 +50,32 @@ export default async function handler(req, res) {
     const raw = await utrResp.text();
     let data = null;
 
-    // Try to parse JSON if possible
     try {
       data = raw ? JSON.parse(raw) : null;
     } catch (e) {
-      // UTR returned non-JSON (HTML/error page/etc.)
       return res.status(utrResp.status || 500).json({
-        error: "UTR API returned non-JSON response",
+        error: "utr_non_json_response",
         status: utrResp.status,
         raw,
       });
     }
 
-    // Non-200 from UTR
     if (!utrResp.ok) {
       return res.status(utrResp.status || 400).json({
-        error: "UTR API error",
+        error: "utr_api_error",
         status: utrResp.status,
         details: data,
       });
     }
 
-    // Standardized shape for the Coaching Hub / Base44
+    // Shape this however you like – this is a simple example.
     return res.status(200).json({
-      utr_id: utrId,
-      rating: data?.rating ?? data?.currentRating ?? null,
-      provisional: data?.provisional ?? data?.isProvisional ?? null,
-      reliability: data?.reliability ?? null,
-      last_updated: data?.lastUpdated ?? null,
-      raw: data,
+      ok: true,
+      ratings: data,
     });
   } catch (err) {
     return res.status(500).json({
-      error: "Snapshot failed",
+      error: "snapshot_failed",
       message: err.message || "Unknown error",
     });
   }
